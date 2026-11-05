@@ -4,24 +4,28 @@ Offline, one-shot synchronized lyrics generation for locally stored music. Trans
 
 ## Quick start (Apple Silicon)
 
-Requires Nix with flakes enabled. Models are downloaded to user caches on first use. Subsequent processing can stay local after the required model files have been cached.
+Requires Nix with flakes enabled on Apple Silicon. Both the Nix inputs and Python wheels are pinned by the committed lock files. Nix builds and runs the executable, Python dependencies and FFmpeg without a separately managed Python environment.
+
+~~~sh
+nix run github:joshan-kana/lyr -- "$HOME/Dropbox/Music Production/Songs/New" --recursive
+~~~
+
+To run a local checkout instead:
 
 ~~~sh
 git clone https://github.com/joshan-kana/lyr.git
 cd lyr
-nix develop -c uv run --locked --extra mac lyr \
-  "$HOME/Dropbox/Music Production/Songs/New" --recursive
+nix run . -- "$HOME/Dropbox/Music Production/Songs/New" --recursive
 ~~~
 
-The Nix development shell supplies Python, UV, FFmpeg, and native audio libraries. The committed uv.lock pins Python dependencies. They are installed in this project's local .venv, not globally.
+You can also install the package with `nix profile install github:joshan-kana/lyr` and run `lyr` directly. Models are downloaded to your user caches on first use; subsequent processing can run without downloading them again.
 
-When a directory contains multiple formats with the same basename, the lossless source is preferred (WAV before FLAC before lossy formats) because those files share one .lrc sidecar. Existing .lrc files are skipped unless --overwrite is explicitly requested. An overwrite preserves a separately named backup.
+When a directory contains multiple formats with the same basename, the lossless source is preferred (WAV before FLAC before lossy formats) because those files share one .lrc sidecar. Existing .lrc files are skipped unless --overwrite is explicitly requested. An overwrite preserves a separately named backup. Re-running the same command without `--overwrite` skips completed LRCs and retries tracks that previously produced no file.
 
 ### Test one song without replacing its existing lyrics
 
 ~~~sh
-nix develop -c uv run --locked --extra mac lyr \
-  "/path/to/song.wav" --suffix .test
+nix run . -- "/path/to/song.wav" --suffix .test
 ~~~
 
 This creates song.test.lrc beside song.wav. Most players automatically load only song.lrc, so use manual lyrics import (if supported) or back up the original and copy the preview to song.lrc for playback testing. Use --output-dir to keep test outputs outside the music library.
@@ -29,8 +33,7 @@ This creates song.test.lrc beside song.wav. Most players automatically load only
 ### Preview before writing
 
 ~~~sh
-nix develop -c uv run --locked --extra mac lyr \
-  "/path/to/song.wav" --dry-run
+nix run . -- "/path/to/song.wav" --dry-run
 ~~~
 
 Dry runs perform inference and report quality warnings without creating sidecars. A normal run with uncertain regions also writes a .lyr-review.json sidecar for review.
@@ -70,10 +73,11 @@ Only audio source paths and generated sidecars are used. Intermediate stems and 
 
 ~~~sh
 nix develop
-uv sync --locked --extra mac
 ruff check .
-python -m unittest discover -s tests -v
+uv lock --check
+PYTHONPATH=src python -m unittest discover -s tests -v
 nix flake check
+nix build
 ~~~
 
 MIT licensed.
