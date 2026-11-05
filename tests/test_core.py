@@ -77,6 +77,25 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn("[00:09.00]", lrc)
 
 
+class SourceSelectionTests(unittest.TestCase):
+    def test_prefers_lossless_with_identical_stems(self):
+        from pathlib import Path
+
+        from beatlrc.cli import unique_audio_sources
+
+        sources = [
+            Path("/music/new/demo.mp3"),
+            Path("/music/new/demo.wav"),
+            Path("/music/new/subfolder/demo.flac"),
+        ]
+        selected, skipped = unique_audio_sources(sources)
+        self.assertEqual(
+            selected,
+            [Path("/music/new/demo.wav"), Path("/music/new/subfolder/demo.flac")],
+        )
+        self.assertEqual(skipped, [(Path("/music/new/demo.mp3"), Path("/music/new/demo.wav"))])
+
+
 class VerificationTests(unittest.TestCase):
     def test_music_nospeech_score_does_not_override_high_logprob(self):
         segments = [

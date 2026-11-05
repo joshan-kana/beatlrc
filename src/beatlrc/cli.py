@@ -9,6 +9,29 @@ from pathlib import Path
 from .pipeline import EXTENSIONS, Options, process_audio
 
 
+def unique_audio_sources(files: list[Path]) -> tuple[list[Path], list[tuple[Path, Path]]]:
+    """Only one audio format can own a basename-matched .lrc sidecar."""
+    priority = {
+        ".wav": 0,
+        ".flac": 1,
+        ".aiff": 2,
+        ".aif": 3,
+        ".mp3": 4,
+        ".m4a": 5,
+        ".ogg": 6,
+        ".opus": 7,
+    }
+    chosen: dict[tuple[Path, str], Path] = {}
+    duplicates: list[tuple[Path, Path]] = []
+    for file in sorted(files, key=lambda p: (priority.get(p.suffix.lower(), 99), str(p))):
+        key = (file.parent, file.stem.casefold())
+        if key in chosen:
+            duplicates.append((file, chosen[key]))
+        else:
+            chosen[key] = file
+    return sorted(chosen.values()), duplicates
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="beatlrc",
@@ -49,6 +72,9 @@ def main(argv: list[str] | None = None) -> int:
         files = sorted(p for p in candidates if p.is_file() and p.suffix.lower() in EXTENSIONS)
     else:
         parser.error(f"path does not exist: {root}")
+    files, duplicates = unique_audio_sources(files)
+    for skipped, selected in duplicates:
+        print(f"Skipping alternate format: {skipped} (using {selected.name})", file=sys.stderr)
     if args.transcript_json and len(files) != 1:
         parser.error("--transcript-json requires exactly one audio file")
     if args.output_dir and len(files) != 1:

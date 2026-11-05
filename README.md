@@ -15,7 +15,7 @@ nix develop -c uv run --locked --extra mac beatlrc \
 
 The Nix development shell supplies Python, UV, FFmpeg, and native audio libraries. The committed uv.lock pins Python dependencies. They are installed in this project's local .venv, not globally.
 
-Existing .lrc files are skipped unless --overwrite is explicitly requested. An overwrite preserves a separately named backup.
+When a directory contains multiple formats with the same basename, the lossless source is preferred (WAV before FLAC before lossy formats) because those files share one .lrc sidecar. Existing .lrc files are skipped unless --overwrite is explicitly requested. An overwrite preserves a separately named backup.
 
 ### Test one song without replacing its existing lyrics
 
