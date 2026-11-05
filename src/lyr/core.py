@@ -177,6 +177,7 @@ def bar_grid(
     bpm: float | None = None,
     offset: float | None = None,
     duration: float | None = None,
+    bar_division: str = "auto",
 ) -> tuple[list[float], float, float]:
     """Return stable bar starts, tempo and downbeat-phase agreement.
 
@@ -185,6 +186,10 @@ def bar_grid(
     """
     if beats_per_bar not in (2, 3, 4, 5, 6, 7, 8):
         raise ValueError("beats_per_bar must be in [2, 8]")
+    if bar_division not in ("auto", "1", "2"):
+        raise ValueError("bar_division must be auto, 1, or 2")
+    if bar_division == "2" and beats_per_bar % 2:
+        raise ValueError("bar_division=2 requires an even number of beats per bar")
     if bpm is not None:
         if not 40 <= bpm <= 240:
             raise ValueError("manual BPM must be between 40 and 240")
@@ -211,19 +216,38 @@ def bar_grid(
             "supply --bpm and --offset or review the beat map"
         )
     phase = votes.index(max(votes))
-    starts = [clean[i] for i in range(phase, len(clean), beats_per_bar)]
+    # Beat trackers often lock onto half-time in fast genres, so a detected
+    # four-beat bar can actually cover TWO musical bars. The model's extra
+    # predictions halfway through a detected bar are evidence for that case.
+    # An explicit selection always overrides this heuristic.
+    if bar_division == "auto":
+        halfway = (
+            votes[(phase + beats_per_bar // 2) % beats_per_bar] if beats_per_bar % 2 == 0 else 0
+        )
+        inferred_bpm = 60.0 / pulse
+        division = (
+            2
+            if beats_per_bar == 4
+            and 60 <= inferred_bpm <= 105
+            and halfway >= max(4, math.ceil(votes[phase] * 0.15))
+            else 1
+        )
+    else:
+        division = int(bar_division)
+    step = beats_per_bar // division
+    starts = [clean[i] for i in range(phase, len(clean), step)]
     if offset is not None:
         shift = offset - starts[0]
         starts = [round(t + shift, 3) for t in starts if t + shift >= 0]
     if len(starts) < 2:
         raise ValueError("too few valid musical bars")
 
-    expected = pulse * beats_per_bar
+    expected = pulse * step
     if any(
         (b - a) < expected * 0.55 or (b - a) > expected * 1.7 for a, b in zip(starts, starts[1:])
     ):
         raise ValueError("beat grid has large discontinuities; manually inspect")
-    return starts, 60.0 / pulse, confidence
+    return starts, 60.0 / pulse * division, confidence
 
 
 def stamp(seconds: float) -> str:
@@ -232,23 +256,32 @@ def stamp(seconds: float) -> str:
 
 
 def render_lrc(
-    words: Iterable[Word], bars: list[float], title: str, *, clear_gaps: bool = True
+    words: Iterable[Word],
+    bars: list[float],
+    title: str,
+    *,
+    clear_gaps: bool = True,
+    boundary_lead_seconds: float = 0.15,
 ) -> str:
     if not bars:
         raise ValueError("no bars")
+    if not 0 <= boundary_lead_seconds <= 0.4:
+        raise ValueError("boundary_lead_seconds must be in [0, 0.4]")
     groups: list[list[str]] = [[] for _ in bars]
     words = sorted(words, key=lambda w: w.start)
     pickup = []
     for word in words:
         # An intro/pickup before the first detected downbeat must not
         # disappear or start playing late at the following musical bar.
-        if word.start + 0.05 < bars[0]:
+        if word.start + boundary_lead_seconds < bars[0]:
             pickup.append(word)
             continue
-        # 50 ms tolerance for slightly early word alignments at a downbeat.
-        location = bisect_right(bars, word.start + 0.05) - 1
+        # Whisper can timestamp an on-beat syllable just before its downbeat.
+        # Attribute a near-boundary onset to the *following* bar, so the first
+        # word on beat one is not stranded at the end of the preceding line.
+        location = bisect_right(bars, word.start + boundary_lead_seconds) - 1
         groups[max(0, location)].append(word.text)
-    lines = [f"[ti:{title}]", "[re:beatlrc]", ""]
+    lines = [f"[ti:{title}]", "[re:lyr]", ""]
     if pickup:
         lines.append(f"[{stamp(pickup[0].start)}]{' '.join(w.text for w in pickup)}")
     had_lyrics = bool(pickup)

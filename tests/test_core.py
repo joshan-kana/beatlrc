@@ -1,16 +1,31 @@
 import unittest
 
-from beatlrc.core import Word, bar_grid, render_lrc, words_from_segments
+from lyr.core import Word, bar_grid, render_lrc, words_from_segments
 
 
 class BarGridTests(unittest.TestCase):
     def test_discards_extra_half_bar_downbeats(self):
         beats = [i * 0.75 for i in range(64)]
         downbeats = [i * 3 for i in range(16)] + [16.5, 19.5, 22.5]
-        bars, bpm, agreement = bar_grid(beats, downbeats)
+        bars, bpm, agreement = bar_grid(beats, downbeats, bar_division="1")
         self.assertEqual(bars[:5], [0, 3, 6, 9, 12])
         self.assertAlmostEqual(bpm, 80.0)
         self.assertGreater(agreement, 0.5)
+
+    def test_auto_detects_double_time_from_extra_midbar_downbeats(self):
+        beats = [i * 0.75 for i in range(72)]
+        downbeats = [i * 3 for i in range(18)] + [7.5, 13.5, 19.5, 25.5, 31.5, 37.5]
+        bars, bpm, agreement = bar_grid(beats, downbeats)
+        self.assertEqual(bars[:6], [0.0, 1.5, 3.0, 4.5, 6.0, 7.5])
+        self.assertEqual(bpm, 160)
+        self.assertGreater(agreement, 0.65)
+
+    def test_auto_stays_normal_when_no_half_bar_evidence(self):
+        beats = [i * 0.75 for i in range(72)]
+        downbeats = beats[::4]
+        bars, bpm, _ = bar_grid(beats, downbeats)
+        self.assertEqual(bars[:4], [0.0, 3.0, 6.0, 9.0])
+        self.assertEqual(bpm, 80)
 
     def test_each_track_has_its_own_tempo(self):
         for tempo in (72, 95, 140):
@@ -98,13 +113,23 @@ class TranscriptTests(unittest.TestCase):
         self.assertEqual([w.text for w in stem.words], ["Hello"])
         self.assertTrue(any("repetitive model output" in f.reason for f in stem.flags))
         self.assertEqual(words_from_segments([segment], 10).words, [])
-        from beatlrc.pipeline import compare_transcripts
+        from lyr.pipeline import compare_transcripts
 
         mix = words_from_segments([segment], 10, keep_repetitions=True)
         self.assertEqual(
             [w.text for w in compare_transcripts(stem, mix, [0, 3, 6]).words],
             ["Hello"],
         )
+
+    def test_first_beat_word_moves_to_next_bar(self):
+        words = [
+            Word(2.87, 3.10, "Onbeat"),
+            Word(2.65, 2.80, "Previous"),
+        ]
+        lrc = render_lrc(words, [0, 3, 6], "Example")
+        self.assertIn("[00:00.00]Previous", lrc)
+        self.assertIn("[00:03.00]Onbeat", lrc)
+        self.assertNotIn("Previous Onbeat", lrc)
 
     def test_exact_bar_changes(self):
         lyrics = [
@@ -124,14 +149,14 @@ class OutputSafetyTests(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
-        from beatlrc.pipeline import Options, process_audio
+        from lyr.pipeline import Options, process_audio
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             audio = root / "demo.wav"
             audio.write_bytes(b"placeholder")
             (root / "demo.lrc").write_text("old")
-            (root / "demo.before-beatlrc.lrc").write_text("backup")
+            (root / "demo.before-lyr.lrc").write_text("backup")
             with self.assertRaisesRegex(FileExistsError, "existing backup"):
                 process_audio(audio, Options(overwrite=True))
 
@@ -140,7 +165,7 @@ class SourceSelectionTests(unittest.TestCase):
     def test_prefers_lossless_with_identical_stems(self):
         from pathlib import Path
 
-        from beatlrc.cli import unique_audio_sources
+        from lyr.cli import unique_audio_sources
 
         sources = [
             Path("/music/new/demo.mp3"),
@@ -170,8 +195,8 @@ class VerificationTests(unittest.TestCase):
         self.assertEqual([w.text for w in result.words], ["recognised"])
 
     def test_mix_only_words_can_rescue_removed_vocals(self):
-        from beatlrc.core import Analysis
-        from beatlrc.pipeline import compare_transcripts
+        from lyr.core import Analysis
+        from lyr.pipeline import compare_transcripts
 
         stem = Analysis([], [], 0)
         mix = Analysis([Word(2, 2.5, "recognised", 0.95)], [], 1)
@@ -180,7 +205,7 @@ class VerificationTests(unittest.TestCase):
         self.assertTrue(output.flags)
 
     def test_repeated_hook_kept_when_both_transcriptions_agree(self):
-        from beatlrc.pipeline import compare_transcripts
+        from lyr.pipeline import compare_transcripts
 
         words = []
         for repeat in range(6):

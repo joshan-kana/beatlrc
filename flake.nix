@@ -46,7 +46,7 @@
         in
         {
           unit =
-            pkgs.runCommand "beatlrc-unit-tests"
+            pkgs.runCommand "lyr-unit-tests"
               {
                 nativeBuildInputs = [ pkgs.python312 ];
                 src = self;

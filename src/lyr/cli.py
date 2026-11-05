@@ -34,7 +34,7 @@ def unique_audio_sources(files: list[Path]) -> tuple[list[Path], list[tuple[Path
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="beatlrc",
+        prog="lyr",
         description="Generate synced lyrics with a per-song beat grid and quality checks.",
     )
     parser.add_argument("path", type=Path, help="an audio file or directory")
@@ -48,6 +48,18 @@ def main(argv: list[str] | None = None) -> int:
         "--no-compare-mix", action="store_true", help="skip second transcription pass"
     )
     parser.add_argument("--beats-per-bar", type=int, default=4)
+    parser.add_argument(
+        "--bar-division",
+        choices=["auto", "1", "2"],
+        default="auto",
+        help="bars per detected bar: auto, 1 (half-time), or 2 (double-time)",
+    )
+    parser.add_argument(
+        "--boundary-lead-ms",
+        type=int,
+        default=150,
+        help="assign words this many milliseconds early to the following bar",
+    )
     parser.add_argument("--bpm", type=float, help="manual constant BPM override")
     parser.add_argument("--offset", type=float, help="manual first downbeat offset in seconds")
     parser.add_argument(
@@ -63,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--suffix", default="", help="suffix before .lrc for side-by-side tests")
     parser.add_argument("--output-dir", type=Path, help="write to separate output directory")
     args = parser.parse_args(argv)
+    if not 0 <= args.boundary_lead_ms <= 400:
+        parser.error("--boundary-lead-ms must be between 0 and 400")
 
     root = args.path.expanduser()
     if root.is_file():
@@ -86,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
         separate=not args.no_separate,
         compare_mix=not args.no_compare_mix,
         beats_per_bar=args.beats_per_bar,
+        bar_division=args.bar_division,
+        boundary_lead_ms=args.boundary_lead_ms,
         bpm=args.bpm,
         offset=args.offset,
         min_words=args.min_words,
@@ -114,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
                     if len(flags) > 12:
                         print(f"    ... and {len(flags) - 12} more")
                 else:
-                    print("  Review details in the .beatlrc-review.json report")
+                    print("  Review details in the .lyr-review.json report")
         except Exception as exc:
             outcomes["failed"] += 1
             print(f"  ERROR: {exc}", file=sys.stderr, flush=True)

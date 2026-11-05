@@ -23,6 +23,8 @@ class Options:
     separate: bool = True
     compare_mix: bool = True
     beats_per_bar: int = 4
+    bar_division: str = "auto"
+    boundary_lead_ms: int = 150
     bpm: float | None = None
     offset: float | None = None
     min_words: int = 8
@@ -224,11 +226,11 @@ def process_audio(path: Path, options: Options) -> dict:
     output = output_base / f"{path.stem}{options.suffix}.lrc"
     if output.exists() and not options.overwrite and not options.dry_run:
         return {"status": "exists", "file": str(path), "output": str(output)}
-    backup = output.with_name(output.stem + ".before-beatlrc.lrc")
+    backup = output.with_name(output.stem + ".before-lyr.lrc")
     if output.exists() and options.overwrite and backup.exists() and not options.dry_run:
         raise FileExistsError(f"refusing to replace existing backup: {backup}")
 
-    with tempfile.TemporaryDirectory(prefix="beatlrc-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="lyr-") as tmp:
         workspace = Path(tmp)
         decoded = workspace / "input.wav"
         decode(path, decoded)
@@ -246,13 +248,15 @@ def process_audio(path: Path, options: Options) -> dict:
             beats,
             downbeats,
             beats_per_bar=options.beats_per_bar,
+            bar_division=options.bar_division,
             bpm=options.bpm,
             offset=options.offset,
             duration=length,
         )
         if options.bpm is None:
             print(
-                f"  {estimated_bpm:.1f} BPM; {len(bars)} bars; "
+                f"  {estimated_bpm:.1f} BPM; {len(bars)} bars "
+                f"(median {statistics.median(b - a for a, b in zip(bars, bars[1:])):.2f}s); "
                 f"{agreement:.0%} downbeat-phase agreement"
             )
         else:
@@ -284,13 +288,20 @@ def process_audio(path: Path, options: Options) -> dict:
                 "flags": [f.__dict__ for f in analysis.flags],
             }
 
-        content = render_lrc(analysis.words, bars, path.stem)
+        content = render_lrc(
+            analysis.words,
+            bars,
+            path.stem,
+            boundary_lead_seconds=options.boundary_lead_ms / 1000,
+        )
         report = {
             "file": str(path),
             "status": "preview" if options.dry_run else "generated",
             "bpm": round(estimated_bpm, 2),
             "beats_per_bar": options.beats_per_bar,
             "bar_count": len(bars),
+            "bar_division": options.bar_division,
+            "boundary_lead_ms": options.boundary_lead_ms,
             "downbeat_agreement": round(agreement, 3) if options.bpm is None else None,
             "accepted_words": len(analysis.words),
             "transcribed_words": analysis.total_words,
@@ -303,7 +314,7 @@ def process_audio(path: Path, options: Options) -> dict:
                 shutil.copy2(output, backup)
             output.write_text(content)
             if analysis.flags:
-                output.with_suffix(".beatlrc-review.json").write_text(
+                output.with_suffix(".lyr-review.json").write_text(
                     json.dumps(report, indent=2) + "\n"
                 )
         return report
