@@ -68,17 +68,21 @@ def words_from_segments(
             reasons.append("low model log probability")
         if no_speech is not None and no_speech > 0.70 and (logprob is None or logprob < -0.70):
             reasons.append("likely non-speech")
-        if segment.get("compression_ratio", 0) > 2.5:
-            reasons.append("repetitive model output")
+        repetitive_output = segment.get("compression_ratio", 0) > 2.5
+        if repetitive_output:
+            flags.append(Flag(start, end, "repetitive model output; verify by listening"))
 
         if reasons:
             flags.append(Flag(start, end, ", ".join(reasons)))
             continue
+        if repetitive_output and not keep_repetitions:
+            continue
 
+        invalid_timestamps = 0
         for w in raw:
             s, e = w.get("start"), w.get("end")
             if not _valid_time(s) or not _valid_time(e) or e <= s or e > duration + 0.5:
-                flags.append(Flag(start, end, "invalid word timestamps"))
+                invalid_timestamps += 1
                 continue
             if e - s > 3.0:
                 flags.append(Flag(s, e, "implausible word duration"))
@@ -91,6 +95,9 @@ def words_from_segments(
             t = str(w.get("word", "")).strip()
             if normalize(t):
                 candidates.append(Word(float(s), float(e), t, p))
+        if invalid_timestamps:
+            noun = "word" if invalid_timestamps == 1 else "words"
+            flags.append(Flag(start, end, f"invalid timestamps for {invalid_timestamps} {noun}"))
 
     candidates.sort(key=lambda w: (w.start, w.end))
     if not candidates:
@@ -231,12 +238,20 @@ def render_lrc(
         raise ValueError("no bars")
     groups: list[list[str]] = [[] for _ in bars]
     words = sorted(words, key=lambda w: w.start)
+    pickup = []
     for word in words:
+        # An intro/pickup before the first detected downbeat must not
+        # disappear or start playing late at the following musical bar.
+        if word.start + 0.05 < bars[0]:
+            pickup.append(word)
+            continue
         # 50 ms tolerance for slightly early word alignments at a downbeat.
         location = bisect_right(bars, word.start + 0.05) - 1
         groups[max(0, location)].append(word.text)
     lines = [f"[ti:{title}]", "[re:beatlrc]", ""]
-    had_lyrics = False
+    if pickup:
+        lines.append(f"[{stamp(pickup[0].start)}]{' '.join(w.text for w in pickup)}")
+    had_lyrics = bool(pickup)
     for start, tokens in zip(bars, groups):
         if tokens:
             lines.append(f"[{stamp(start)}]{' '.join(tokens)}")

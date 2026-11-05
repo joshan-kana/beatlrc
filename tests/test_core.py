@@ -64,6 +64,48 @@ class TranscriptTests(unittest.TestCase):
         self.assertLess(len(result.words), 10)
         self.assertTrue(any("repetitive" in f.reason for f in result.flags))
 
+    def test_invalid_word_timestamps_are_reported_once_per_segment(self):
+        segment = {
+            "start": 3,
+            "end": 5,
+            "words": [
+                {"word": "a", "start": 3.1, "end": 3.1},
+                {"word": "b", "start": 3.2, "end": 3.2},
+                {"word": "c", "start": 3.3, "end": 3.6},
+            ],
+        }
+        result = words_from_segments([segment], 10)
+        self.assertEqual([w.text for w in result.words], ["c"])
+        self.assertEqual(
+            [f.reason for f in result.flags],
+            ["invalid timestamps for 2 words"],
+        )
+
+    def test_early_pickup_is_displayed_before_first_downbeat(self):
+        lrc = render_lrc([Word(0.25, 0.6, "Intro")], [2, 5, 8], "Example")
+        self.assertIn("[00:00.25]Intro", lrc)
+        self.assertIn("[00:02.00]", lrc)
+
+    def test_repetition_flag_is_corroborated_in_two_pass_mode(self):
+        segment = {
+            "start": 0,
+            "end": 4,
+            "compression_ratio": 3.1,
+            "avg_logprob": -0.2,
+            "words": [{"word": "Hello", "start": 0.5, "end": 1.0}],
+        }
+        stem = words_from_segments([segment], 10, keep_repetitions=True)
+        self.assertEqual([w.text for w in stem.words], ["Hello"])
+        self.assertTrue(any("repetitive model output" in f.reason for f in stem.flags))
+        self.assertEqual(words_from_segments([segment], 10).words, [])
+        from beatlrc.pipeline import compare_transcripts
+
+        mix = words_from_segments([segment], 10, keep_repetitions=True)
+        self.assertEqual(
+            [w.text for w in compare_transcripts(stem, mix, [0, 3, 6]).words],
+            ["Hello"],
+        )
+
     def test_exact_bar_changes(self):
         lyrics = [
             Word(0.1, 0.4, "First"),
@@ -75,6 +117,23 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn("[00:03.00]second", lrc)
         self.assertIn("[00:06.00]Third", lrc)
         self.assertIn("[00:09.00]", lrc)
+
+
+class OutputSafetyTests(unittest.TestCase):
+    def test_existing_backup_blocks_overwrite_before_processing(self):
+        import tempfile
+        from pathlib import Path
+
+        from beatlrc.pipeline import Options, process_audio
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            audio = root / "demo.wav"
+            audio.write_bytes(b"placeholder")
+            (root / "demo.lrc").write_text("old")
+            (root / "demo.before-beatlrc.lrc").write_text("backup")
+            with self.assertRaisesRegex(FileExistsError, "existing backup"):
+                process_audio(audio, Options(overwrite=True))
 
 
 class SourceSelectionTests(unittest.TestCase):
@@ -116,7 +175,7 @@ class VerificationTests(unittest.TestCase):
 
         stem = Analysis([], [], 0)
         mix = Analysis([Word(2, 2.5, "recognised", 0.95)], [], 1)
-        output = compare_transcripts(stem, mix)
+        output = compare_transcripts(stem, mix, [0, 3, 6])
         self.assertEqual([w.text for w in output.words], ["recognised"])
         self.assertTrue(output.flags)
 
@@ -132,9 +191,9 @@ class VerificationTests(unittest.TestCase):
         stem = words_from_segments(segments, 20, keep_repetitions=True)
         mix = words_from_segments(segments, 20, keep_repetitions=True)
         self.assertTrue(any("highly repetitive" in f.reason for f in stem.flags))
-        self.assertEqual(len(compare_transcripts(stem, mix).words), 24)
+        self.assertEqual(len(compare_transcripts(stem, mix, [0, 3, 6, 9, 12]).words), 24)
         empty = words_from_segments([], 20)
-        self.assertFalse(compare_transcripts(stem, empty).words)
+        self.assertFalse(compare_transcripts(stem, empty, [0, 3, 6, 9, 12]).words)
 
 
 if __name__ == "__main__":

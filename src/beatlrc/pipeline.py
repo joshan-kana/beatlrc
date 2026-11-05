@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -135,11 +136,12 @@ def old_json_segments(path: Path) -> list[dict]:
     raise ValueError("JSON must have 'lines' (audio-lyrics) or 'segments' (Whisper)")
 
 
-def compare_transcripts(stem: Analysis, mix: Analysis) -> Analysis:
-    """Review mix disagreements and suppress uncorroborated repeating loops.
+def compare_transcripts(stem: Analysis, mix: Analysis, bars: list[float]) -> Analysis:
+    """Check transcribed phrases against independent original-mix recognition.
 
-    Repetition is normal in choruses. Don't remove a repeated phrase if both
-    independent transcriptions recognize it at the same time.
+    Comparisons use *musical bars*, never arbitrary wall-clock windows. A
+    repeated hook is retained if it is independently supported; otherwise it
+    is flagged rather than presented as a confirmed lyric.
     """
     from difflib import SequenceMatcher
 
@@ -147,38 +149,58 @@ def compare_transcripts(stem: Analysis, mix: Analysis) -> Analysis:
 
     accepted: list[Word] = []
     warnings = list(stem.flags) + list(mix.flags)
-    repeated = [f for f in stem.flags if "highly repetitive" in f.reason]
+    suspicious = (
+        "highly repetitive transcript",
+        "repetitive model output",
+    )
 
-    blocks = sorted(set(int(word.start // 4) for word in stem.words + mix.words))
-    for block in blocks:
-        start, end = 4.0 * block, 4.0 * (block + 1)
+    # There can be a pickup preceding the first detected downbeat.
+    boundaries = [0.0] if bars[0] > 0 else []
+    boundaries += bars
+    if len(boundaries) < 2:
+        raise ValueError("not enough musical bars to compare transcriptions")
+    final_duration = max(
+        boundaries[-1] + (boundaries[-1] - boundaries[-2]),
+        max((w.end for w in stem.words + mix.words), default=boundaries[-1]),
+    )
+    boundaries.append(final_duration + 0.01)
+
+    for start, end in zip(boundaries, boundaries[1:]):
         left = [w for w in stem.words if start <= w.start < end]
         right = [w for w in mix.words if start <= w.start < end]
-        suspect_repeat = any(f.start < end and start < f.end for f in repeated)
+        suspicious_stem = any(
+            any(phrase in flag.reason for phrase in suspicious)
+            and flag.start < end
+            and start < flag.end
+            for flag in stem.flags
+        )
+        suspicious_mix = any(
+            any(phrase in flag.reason for phrase in suspicious)
+            and flag.start < end
+            and start < flag.end
+            for flag in mix.flags
+        )
+
         if not left:
             if right:
-                # Demucs can remove intelligible sung/rap vocals alongside
-                # accompaniment. Rescue strongly recognized mix words, unless
-                # that pass is itself stuck in a repetition loop.
-                repeated_mix = any(
-                    "highly repetitive" in f.reason and f.start < end and start < f.end
-                    for f in mix.flags
-                )
-                if not repeated_mix and sum(w.probability for w in right) / len(right) >= 0.55:
+                # Separation sometimes removes an otherwise clear rap phrase.
+                # Corroboration is unavailable: only rescue high-confidence
+                # words and always add a review warning.
+                if not suspicious_mix and statistics.mean(w.probability for w in right) >= 0.55:
                     accepted.extend(right)
                 warnings.append(Flag(start, end, "words only in original mix; review"))
             continue
         if not right:
-            if suspect_repeat:
-                warnings.append(Flag(start, end, "unconfirmed repeated phrase omitted"))
+            if suspicious_stem:
+                warnings.append(Flag(start, end, "uncorroborated repeated phrase omitted"))
             else:
                 accepted.extend(left)
             continue
 
-        a = " ".join(normalize(w.text) for w in left)
-        b = " ".join(normalize(w.text) for w in right)
-        similarity = SequenceMatcher(None, a, b, autojunk=False).ratio()
-        if suspect_repeat:
+        text_stem = " ".join(normalize(w.text) for w in left)
+        text_mix = " ".join(normalize(w.text) for w in right)
+        similarity = SequenceMatcher(None, text_stem, text_mix, autojunk=False).ratio()
+        if suspicious_stem or suspicious_mix:
             if similarity >= 0.56:
                 accepted.extend(left)
             else:
@@ -187,7 +209,7 @@ def compare_transcripts(stem: Analysis, mix: Analysis) -> Analysis:
             warnings.append(
                 Flag(start, end, f"isolated vocals and original mix disagree ({similarity:.0%})")
             )
-            if sum(w.probability for w in left) / len(left) >= 0.55:
+            if statistics.mean(w.probability for w in left) >= 0.55:
                 accepted.extend(left)
         else:
             accepted.extend(left)
@@ -202,6 +224,9 @@ def process_audio(path: Path, options: Options) -> dict:
     output = output_base / f"{path.stem}{options.suffix}.lrc"
     if output.exists() and not options.overwrite and not options.dry_run:
         return {"status": "exists", "file": str(path), "output": str(output)}
+    backup = output.with_name(output.stem + ".before-beatlrc.lrc")
+    if output.exists() and options.overwrite and backup.exists() and not options.dry_run:
+        raise FileExistsError(f"refusing to replace existing backup: {backup}")
 
     with tempfile.TemporaryDirectory(prefix="beatlrc-") as tmp:
         workspace = Path(tmp)
@@ -247,6 +272,7 @@ def process_audio(path: Path, options: Options) -> dict:
                 analysis = compare_transcripts(
                     analysis,
                     words_from_segments(mix_segments, length, keep_repetitions=True),
+                    bars,
                 )
 
         if len(analysis.words) < options.min_words:
@@ -274,9 +300,6 @@ def process_audio(path: Path, options: Options) -> dict:
         if not options.dry_run:
             output.parent.mkdir(parents=True, exist_ok=True)
             if output.exists() and options.overwrite:
-                backup = output.with_name(output.stem + ".before-beatlrc.lrc")
-                if backup.exists():
-                    raise FileExistsError(f"refusing to replace existing backup: {backup}")
                 shutil.copy2(output, backup)
             output.write_text(content)
             if analysis.flags:

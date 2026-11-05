@@ -24,7 +24,7 @@ nix develop -c uv run --locked --extra mac beatlrc \
   "/path/to/song.wav" --suffix .test
 ~~~
 
-This creates song.test.lrc beside song.wav. Compare it in a player before replacing any trusted lyrics. Use --output-dir to write test outputs outside the music library.
+This creates song.test.lrc beside song.wav. Most players automatically load only song.lrc, so use manual lyrics import (if supported) or back up the original and copy the preview to song.lrc for playback testing. Use --output-dir to keep test outputs outside the music library.
 
 ### Preview before writing
 
@@ -57,7 +57,7 @@ Dry runs perform inference and report quality warnings without creating sidecars
 2. [Beat This!](https://github.com/CPJKU/beat_this) detects quarter-note beats and candidate downbeats.
 3. The grid is reconstructed from beat progression and downbeat agreement. Extra half-bar downbeat predictions are ignored. BPM is estimated afresh for every song.
 4. [Demucs](https://github.com/facebookresearch/demucs) separates vocals, then [MLX Whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) transcribes words with timestamps.
-5. The original mix is independently transcribed by default. Low-confidence regions, suspicious repetitions, and significant disagreement are flagged or omitted rather than silently accepted.
+5. The original mix is independently transcribed by default. Repeated hooks are checked against both transcriptions before being retained. Low-confidence regions and significant disagreement are flagged or omitted rather than silently accepted.
 6. Remaining words are grouped at bar starts and saved as .lrc entries. Blank bar entries clear lyrics in extended instrumental passages.
 
 Instrumental detection is conservative, not infallible: tracks with too few reliable recognized words are skipped. Heavy vocal effects, loops, unusual rhythmic structures, and changing time signatures can confuse either the language model or beat tracker. Missing lyrics cannot be recovered by a beat-alignment step alone. Inspect the review reports and listen to suspect sections; editing the LRC manually may still be necessary.

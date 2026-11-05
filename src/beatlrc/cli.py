@@ -103,9 +103,18 @@ def main(argv: list[str] | None = None) -> int:
             result = process_audio(file, options)
             status = result["status"]
             outcomes[status] += 1
-            print(" ", status, result.get("output", ""), flush=True)
+            action = "would write" if status == "preview" else status
+            print(" ", action, result.get("output", ""), flush=True)
             if result.get("flags"):
-                print(f"  {len(result['flags'])} uncertain regions; inspect review report")
+                flags = result["flags"]
+                print(f"  {len(flags)} uncertain regions")
+                if args.dry_run or status == "no-reliable-lyrics":
+                    for flag in flags[:12]:
+                        print(f"    {flag['start']:.2f}-{flag['end']:.2f}: {flag['reason']}")
+                    if len(flags) > 12:
+                        print(f"    ... and {len(flags) - 12} more")
+                else:
+                    print("  Review details in the .beatlrc-review.json report")
         except Exception as exc:
             outcomes["failed"] += 1
             print(f"  ERROR: {exc}", file=sys.stderr, flush=True)
